@@ -1,0 +1,31 @@
+{
+  "name": "ansible-dev-container-podman",
+  "image": "registry.redhat.io/ansible-automation-platform-25/ansible-dev-tools-rhel8:latest",
+  "containerUser": "root",
+  "runArgs": [
+    "--cap-add=SYS_ADMIN",
+    "--cap-add=SYS_RESOURCE",
+    "--device",
+    "/dev/fuse",
+    "--security-opt",
+    "seccomp=unconfined",
+    "--security-opt",
+    "label=disable",
+    "--security-opt",
+    "apparmor=unconfined",
+    "--userns=host",
+    "--hostname=ansible-dev-container",
+    "--volume",
+    "ansible-dev-tools-container-storage:/var/lib/containers"
+  ],
+  "customizations": {
+    "vscode": {
+      "extensions": ["redhat.ansible", "redhat.vscode-redhat-account"]
+    }
+  },
+  "postCreateCommand": {
+    "python": "pip3 install boto3 botocore",
+    "collection": "ansible-galaxy collection install amazon.aws",
+    "awscli": "/bin/sh -c 'curl 'https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip' -o '/tmp/awscliv2.zip' && microdnf install unzip && cd /tmp && unzip awscliv2.zip && ./aws/install'"
+  }
+}

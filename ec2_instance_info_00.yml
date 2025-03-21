@@ -1,0 +1,9 @@
+---
+- name: Gather EC2 information
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Gather information about all instances
+      amazon.aws.ec2_instance_info:
+        region: ap-northeast-1

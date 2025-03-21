@@ -1,0 +1,51 @@
+---
+- name: "IAM Identity Center ユーザーの作成"
+  hosts: localhost
+  gather_facts: false
+  vars_files: vars/main.yml
+  vars:
+    user_name: "new_user"
+    user_email: "new_user@example.com"
+    family_name: "New"
+    given_name: "User"
+    display_name: "{{ given_name }} {{ family_name }}"
+  environment:
+    AWS_DEFAULT_REGION: "{{ aws_region }}"
+
+  tasks:
+    - name: "IAM Identity Center ユーザーの存在確認"
+      ansible.builtin.command: >
+        aws identitystore list-users
+          --identity-store-id "{{ identity_store_id }}"
+          --filter "AttributePath=userName,AttributeValue={{ user_name }}"
+          --output json
+      register: list_users_result
+      changed_when: false
+
+    - name: "ユーザーが既に存在するか確認"
+      ansible.builtin.set_fact:
+        user_exists: >-
+          {{
+            (list_users_result.stdout | from_json).Users | length > 0
+          }}
+
+    - name: "IAM Identity Center ユーザーの作成"
+      ansible.builtin.command: >
+        aws identitystore create-user
+          --identity-store-id "{{ identity_store_id }}"
+          --user-name "{{ user_name }}"
+          --display-name "{{ display_name }}"
+          --name "{\"FamilyName\":\"{{ family_name }}\",\"GivenName\":\"{{ given_name }}\"}"
+          --emails "[{\"Value\":\"{{ user_email }}\",\"Type\":\"work\",\"Primary\":true}]"
+      register: create_user_result
+      changed_when: false
+      when: not user_exists
+
+    - name: "ユーザー作成スキップメッセージ"
+      ansible.builtin.debug:
+        msg: "ユーザー '{{ user_name }}' は既に存在しています。"
+      when: user_exists
+
+    - name: "ユーザー存在確認結果"
+      ansible.builtin.debug:
+        msg: "{{ create_user_result.stdout | default('ユーザー作成タスクがスキップされました。') }}"

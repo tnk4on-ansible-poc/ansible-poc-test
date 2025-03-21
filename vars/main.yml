@@ -1,0 +1,5 @@
+---
+identity_store_id: "d-XXXXXXXXXX"  # Identity Store IDを指定
+aws_region: "ap-northeast-1"  # リージョンを指定
+sso_instance_id: "ssoins-XXXXXXXXXXXXXXXX"  # インスタンスIDを指定
+sso_instance_arn: "arn:aws:sso:::instance/{{ sso_instance_id }}"  # インスタンスARN

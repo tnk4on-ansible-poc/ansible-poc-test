@@ -1,0 +1,131 @@
+---
+- name: "IAM Identity Center ユーザーの削除"
+  hosts: localhost
+  gather_facts: false
+  vars_files: vars/main.yml
+  vars:
+    target_username: "new_user"
+    target_account_name: "TEST SANDBOX01"  # AWS組織アカウント名を指定
+  environment:
+    AWS_DEFAULT_REGION: "{{ aws_region }}"
+
+  tasks:
+    - name: "既存のIAM Identity CenterユーザーIDの取得"
+      ansible.builtin.command: >
+        aws identitystore get-user-id
+          --output text
+          --identity-store-id "{{ identity_store_id }}"
+          --alternate-identifier "{\"UniqueAttribute\":{\"AttributePath\":\"userName\",\"AttributeValue\":\"{{ target_username }}\"}}"
+          --query "UserId"
+      register: get_user_id_result
+      changed_when: false
+      failed_when:
+        - "'USER not found' in get_user_id_result.stderr"
+      ignore_errors: true
+
+    - name: "IAMユーザーが見つからない場合のメッセージ"
+      ansible.builtin.debug:
+        msg: "IAMユーザー '{{ target_username }}' は存在しません。"
+      when: "'USER not found' in get_user_id_result.stderr"
+
+    - name: "既存のユーザーIDを設定"
+      ansible.builtin.set_fact:
+        existing_user_id: "{{ get_user_id_result.stdout }}"
+      when: get_user_id_result.rc == 0
+
+    - name: "既存のユーザーの許可リストを取得"
+      ansible.builtin.command: >
+        aws sso-admin list-account-assignments-for-principal
+          --instance-arn "{{ sso_instance_arn }}"
+          --principal-id "{{ existing_user_id }}"
+          --principal-type "USER"
+          --query "AccountAssignments[].PermissionSetArn"
+          --output json
+      register: permission_set_arn
+      changed_when: false
+      when: existing_user_id is defined and existing_user_id != ""
+
+    - name: "許可リスト取得結果のデバッグ"
+      ansible.builtin.debug:
+        var: permission_set_arn.stdout | from_json
+
+    - name: "AWSアカウントのIDを取得"
+      ansible.builtin.command: >
+        aws organizations list-accounts
+          --query "Accounts[?Name=='{{ target_account_name }}'].Id | [0]"
+          --output text
+      register: target_account_id_result
+      changed_when: false
+
+    - name: "AWSアカウントIDを文字列に設定"
+      ansible.builtin.set_fact:
+        target_account_id: "{{ target_account_id_result.stdout }}"
+
+    - name: "デバッグ：AWSアカウントID"
+      ansible.builtin.debug:
+        var: target_account_id
+
+    - name: "AWSアカウントに紐づくIAM Identity Centerユーザーの確認"
+      ansible.builtin.command: >
+        aws sso-admin list-account-assignments-for-principal
+          --instance-arn "{{ sso_instance_arn }}"
+          --principal-id "{{ existing_user_id }}"
+          --principal-type "USER"
+          --output json
+      register: account_assignments_result
+      changed_when: false
+      when: existing_user_id is defined and existing_user_id != ""
+
+    - name: "デバッグ：アカウント割り当て結果"
+      ansible.builtin.debug:
+        var: account_assignments_result.stdout | from_json
+
+    - name: "AWSアカウントに紐づくユーザーが存在するか確認"
+      ansible.builtin.set_fact:
+        has_account_assignments: >-
+          {{
+            (account_assignments_result.stdout | default('{}') | from_json).AccountAssignments | default([]) | length > 0
+          }}
+
+    - name: "許可リスト取得結果のデバッグ"
+      ansible.builtin.debug:
+        var: permission_set_arn.stdout | from_json
+      when: has_account_assignments
+
+    - name: "許可リストをリスト形式に変換"
+      ansible.builtin.set_fact:
+        permission_set_arns: "{{ permission_set_arn.stdout | from_json }}"
+      when: has_account_assignments
+
+    - name: "IAM Identity Centerユーザーの削除（ターゲットアカウント）"
+      ansible.builtin.command: >
+        aws sso-admin delete-account-assignment
+          --instance-arn "{{ sso_instance_arn }}"
+          --target-id "{{ target_account_id }}"
+          --target-type "AWS_ACCOUNT"
+          --principal-type "USER"
+          --principal-id "{{ existing_user_id }}"
+          --permission-set-arn "{{ item }}"
+      loop: "{{ permission_set_arns }}"
+      when: existing_user_id is defined and target_account_id is defined and has_account_assignments and permission_set_arns | length > 0
+      register: delete_account_assignment_result
+      changed_when: false
+
+    - name: "IAM Identity Centerユーザーの削除結果（ターゲットアカウント）"
+      ansible.builtin.debug:
+        var: delete_account_assignment_result
+      when: has_account_assignments
+
+    - name: "既存のIAM Identity Centerユーザーの削除"
+      ansible.builtin.command: >
+        aws identitystore delete-user
+          --identity-store-id "{{ identity_store_id }}"
+          --user-id "{{ existing_user_id }}"
+      when: existing_user_id is defined and existing_user_id != ""
+      register: delete_user_result
+      changed_when: false
+
+    - name: "ユーザー削除結果のデバッグ"
+      ansible.builtin.debug:
+        var: delete_user_result
+      when: existing_user_id is defined and existing_user_id != ""

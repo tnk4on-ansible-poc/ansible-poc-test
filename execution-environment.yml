@@ -1,0 +1,19 @@
+---
+version: 3
+dependencies:
+  galaxy:
+    collections:
+      - name: amazon.aws
+  python:
+    - boto3
+    - botocore
+
+additional_build_steps:
+  prepend_base:
+    - RUN /bin/sh -c '
+        curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "/tmp/awscliv2.zip" &&
+        microdnf install unzip &&
+        cd /tmp &&
+        unzip awscliv2.zip &&
+        ./aws/install
+      '

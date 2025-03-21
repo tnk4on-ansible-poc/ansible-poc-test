@@ -1,0 +1,203 @@
+---
+- name: "IAM Identity Center ユーザーにグループと許可セットを割り当てる"
+  hosts: localhost
+  gather_facts: false
+  vars_files: vars/main.yml
+  vars:
+    target_username: "new_user"        # 割り当て対象のユーザー名
+    target_groups:                    # 割り当てるグループのリスト
+      - "test group01"
+      - "test group02"
+    permission_set_names:             # 割り当てる許可セットの名前リスト
+      - "AWSAdministratorAccess"
+      - "TESTAdmin"
+    target_account_name: "TEST SANDBOX01"  # AWS組織アカウント名を指定
+  environment:
+    AWS_DEFAULT_REGION: "{{ aws_region }}"
+
+  tasks:
+    - name: "IAM Identity Center ユーザーIDの取得"
+      ansible.builtin.command: >
+        aws identitystore get-user-id
+          --output text
+          --identity-store-id "{{ identity_store_id }}"
+          --alternate-identifier "{\"UniqueAttribute\":{\"AttributePath\":\"userName\",\"AttributeValue\":\"{{ target_username }}\"}}"
+          --query "UserId"
+      register: get_user_id_result
+      changed_when: false
+      failed_when: "'USER not found' in get_user_id_result.stderr"
+      ignore_errors: true
+
+    - name: "ユーザーが見つからない場合のメッセージ"
+      ansible.builtin.debug:
+        msg: "ユーザー '{{ target_username }}' は存在しません。"
+      when: "'USER not found' in get_user_id_result.stderr"
+
+    - name: "ユーザーIDを設定"
+      ansible.builtin.set_fact:
+        user_id: "{{ get_user_id_result.stdout }}"
+      when: get_user_id_result.rc == 0
+
+    - name: "IAM Identity Center グループIDの取得"
+      ansible.builtin.command: >
+        aws identitystore list-groups
+          --identity-store-id "{{ identity_store_id }}"
+          --output json
+      register: list_groups_result
+      changed_when: false
+
+    - name: "グループIDを取得"
+      ansible.builtin.set_fact:
+        group_ids: >-
+          {{
+            (list_groups_result.stdout | from_json).Groups
+            | selectattr('DisplayName', 'in', target_groups)
+            | map(attribute='GroupId')
+            | list
+          }}
+
+    # - name: "デバッグ：group_ids の内容を表示"
+    #   ansible.builtin.debug:
+    #     var: group_ids
+
+    - name: "ユーザーがグループに属しているか確認"
+      ansible.builtin.command: >
+        aws identitystore list-group-memberships
+          --identity-store-id "{{ identity_store_id }}"
+          --group-id "{{ item }}"
+          --output json
+      register: group_memberships_result
+      changed_when: false
+      loop: "{{ group_ids }}"
+      loop_control:
+        label: "{{ item }}"
+
+    # - name: "デバッグ：group_memberships_resultの表示"
+    #   ansible.builtin.debug:
+    #     var: group_memberships_result.results
+
+    - name: "グループに追加する必要があるか確認"
+      ansible.builtin.set_fact:
+        groups_to_add: >-
+          {{
+            group_ids | difference(
+              group_memberships_result.results
+              | map(attribute='stdout')
+              | map('from_json')
+              | map(attribute='GroupMemberships')
+              | flatten
+              | selectattr('MemberId.UserId', 'equalto', user_id)
+              | map(attribute='GroupId')
+              | list
+            )
+          }}
+
+    # - name: "デバッグ：groups_to_add の内容を表示"
+    #   ansible.builtin.debug:
+    #     var: groups_to_add
+
+    - name: "ユーザーをグループに追加"
+      ansible.builtin.command: >
+        aws identitystore create-group-membership
+          --identity-store-id "{{ identity_store_id }}"
+          --group-id "{{ item }}"
+          --member-id "{\"UserId\":\"{{ user_id }}\"}"
+      loop: "{{ groups_to_add }}"
+      register: add_to_group_result
+      changed_when: false
+      when: groups_to_add | length > 0 and user_id is defined
+
+    # - name: "デバッグ：グループ追加結果の表示"
+    #   ansible.builtin.debug:
+    #     var: add_to_group_result
+
+    - name: "AWSアカウントリストの取得"
+      ansible.builtin.command: >
+        aws organizations list-accounts
+          --output json
+      register: account_list_result
+      changed_when: false
+
+    - name: "アカウント名からIDを取得"
+      ansible.builtin.set_fact:
+        target_account_id: >-
+          {{
+            (account_list_result.stdout | from_json).Accounts
+            | selectattr('Name', 'equalto', target_account_name)
+            | map(attribute='Id')
+            | first
+          }}
+
+    - name: "許可セット名とARNのリストを取得"
+      ansible.builtin.include_tasks: list_permission_sets.yml
+
+    # - name: "デバッグ：許可セット名とARNのリストを表示"
+    #   ansible.builtin.debug:
+    #     var: permission_set_list
+
+    - name: "適用する許可セットのARNを取得"
+      ansible.builtin.set_fact:
+        permission_set_arns: >-
+          {{
+            permission_set_list
+            | selectattr('Name', 'in', permission_set_names)
+            | map(attribute='PermissionSetArn')
+            | list
+          }}
+
+    - name: "ユーザーに割り当て済みの許可セットを取得"
+      ansible.builtin.command: >
+        aws sso-admin list-account-assignments
+          --instance-arn "{{ sso_instance_arn }}"
+          --account-id "{{ target_account_id }}"
+          --permission-set-arn "{{ item }}"
+          --output json
+      loop: "{{ permission_set_arns }}"
+      register: existing_assignments_result
+      changed_when: false
+      loop_control:
+        label: "{{ item }}"
+
+    # - name: "割り当て済み許可セットのデバッグ"
+    #   ansible.builtin.debug:
+    #     var: existing_assignments_result.results | map(attribute='stdout_lines') | list
+
+    - name: "割り当てが必要な許可セットを確認"
+      ansible.builtin.set_fact:
+        permission_sets_to_assign: >-
+          {{
+            permission_set_arns | reject('in', (
+              existing_assignments_result.results
+              | map(attribute='stdout')
+              | map('from_json')
+              | map(attribute='AccountAssignments')
+              | flatten
+              | selectattr('PrincipalId', 'equalto', user_id)
+              | map(attribute='PermissionSetArn')
+              | list
+            )) | list
+          }}
+
+    # - name: "デバッグ：permission_sets_to_assign の内容を表示"
+    #   ansible.builtin.debug:
+    #     var: permission_sets_to_assign
+
+    - name: "許可セットをユーザーに割り当て"
+      ansible.builtin.command: >
+        aws sso-admin create-account-assignment
+          --instance-arn "{{ sso_instance_arn }}"
+          --target-id "{{ target_account_id }}"
+          --target-type "AWS_ACCOUNT"
+          --permission-set-arn "{{ item }}"
+          --principal-type "USER"
+          --principal-id "{{ user_id }}"
+      loop: "{{ permission_sets_to_assign }}"
+      loop_control:
+        label: "{{ item }}"
+      register: assign_permission_result
+      changed_when: false
+      when: permission_sets_to_assign | length > 0 and user_id is defined
+
+    # - name: "許可セット割り当て結果のデバッグ"
+    #   ansible.builtin.debug:
+    #     var: assign_permission_result

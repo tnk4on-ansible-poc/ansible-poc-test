@@ -1,0 +1,26 @@
+- name: "IAM Identity Center 許可セットのリストを取得"
+  ansible.builtin.command: >
+    aws sso-admin list-permission-sets
+      --instance-arn "{{ sso_instance_arn }}"
+  register: list_permission_sets_result
+  changed_when: false
+
+- name: "許可セットの詳細を取得"
+  ansible.builtin.command: >
+    aws sso-admin describe-permission-set
+      --instance-arn "{{ sso_instance_arn }}"
+      --permission-set-arn "{{ item }}"
+  loop: "{{ (list_permission_sets_result.stdout | from_json).PermissionSets }}"
+  register: permission_set_details
+  changed_when: false
+
+- name: "許可セット名とARNをリスト化"
+  ansible.builtin.set_fact:
+    permission_set_list: >-
+      {{
+        permission_set_details.results
+        | map(attribute='stdout')
+        | map('from_json')
+        | map(attribute='PermissionSet')
+        | list
+      }}
