@@ -1,0 +1,22 @@
+---
+- name: Retrieve IAM User Information
+  hosts: localhost
+  gather_facts: false
+  vars_files:
+    - vars/main.yml
+  vars:
+    iam_user_name: "testuser"  # IAMユーザー名を指定
+
+  tasks:
+    - name: Get information about a specific IAM user
+      amazon.aws.iam_user_info:
+        name: "{{ iam_user_name }}"
+      register: iam_user_info
+
+    - name: Display IAM user information
+      ansible.builtin.debug:
+        msg: >
+          User Name: {{ iam_user_info.iam_users[0].user_name }},
+          User ID: {{ iam_user_info.iam_users[0].user_id }},
+          ARN: {{ iam_user_info.iam_users[0].arn }},
+          Created At: {{ iam_user_info.iam_users[0].create_date }}

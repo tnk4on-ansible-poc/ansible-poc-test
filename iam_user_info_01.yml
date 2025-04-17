@@ -1,0 +1,38 @@
+---
+- name: Retrieve IAM User Information with Retry
+  hosts: localhost
+  gather_facts: false
+  vars_files:
+    - vars/main.yml
+  vars:
+    iam_user_name: "testuser"  # IAMユーザー名を指定
+    wait_time: 30              # 待機時間（秒）
+    max_retries: 10            # 最大リトライ回数
+
+  tasks:
+    - name: Initialize retry counter
+      ansible.builtin.set_fact:
+        retry_count: 0
+
+    - name: Check if IAM user exists
+      amazon.aws.iam_user_info:
+        name: "{{ iam_user_name }}"
+      register: iam_user_info
+      until: iam_user_info.iam_users | length > 0
+      retries: "{{ max_retries }}"
+      delay: "{{ wait_time }}"
+      failed_when: false  # エラーを無視して未作成として扱う
+
+    - name: Display IAM user information if created
+      ansible.builtin.debug:
+        msg: >
+          User Name: {{ iam_user_info.iam_users[0].user_name }},
+          User ID: {{ iam_user_info.iam_users[0].user_id }},
+          ARN: {{ iam_user_info.iam_users[0].arn }},
+          Created At: {{ iam_user_info.iam_users[0].create_date }}
+      when: iam_user_info.iam_users | length > 0
+
+    - name: Output result if IAM user is not created
+      ansible.builtin.debug:
+        msg: "IAM user '{{ iam_user_name }}' was not created within the maximum retries."
+      when: iam_user_info.iam_users | length == 0
