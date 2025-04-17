@@ -16,7 +16,11 @@
     - name: Display IAM user information
       ansible.builtin.debug:
         msg: >
+          {% if iam_user_info.iam_users | length > 0 %}
           User Name: {{ iam_user_info.iam_users[0].user_name }},
           User ID: {{ iam_user_info.iam_users[0].user_id }},
           ARN: {{ iam_user_info.iam_users[0].arn }},
           Created At: {{ iam_user_info.iam_users[0].create_date }}
+          {% else %}
+          No IAM user found with the name '{{ iam_user_name }}'.
+          {% endif %}
